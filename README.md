@@ -1,23 +1,22 @@
 # mailchimp-mcp
 
-**2 tools. 282 endpoints. Zero bloat.**
+**12 tools. 282 endpoints. Zero bloat.**
 
-A Mailchimp MCP server that covers the entire Marketing API through just two tools: `search` to discover endpoints, and `execute` to call them. No tool sprawl, no wasted tokens.
+A hybrid Mailchimp MCP server: 10 native tools for the email campaign workflow you use every day, plus `search` and `execute` for full access to all 282 Marketing API endpoints. Inspired by [Cloudflare's Code Mode](https://developers.cloudflare.com/agents/guides/remote-mcp-server/) architecture.
 
 ## Why?
 
-Every other Mailchimp MCP server exposes 40–50+ individual tools. Each tool definition consumes tokens in the LLM context window on every single turn — even when you're not using Mailchimp. This server takes the approach pioneered by [Cloudflare's MCP](https://developers.cloudflare.com/agents/guides/remote-mcp-server/): just two generic tools that cover everything.
+Every other Mailchimp MCP server exposes 40–50+ individual tools. Each tool definition eats tokens in the LLM context on every turn — even when you're not using Mailchimp. We use the hybrid approach from [Cloudflare's Code Mode deep dive](https://blog.cloudflare.com/code-mode-for-mcp/): optimized native tools for high-frequency operations, plus two universal tools for everything else.
 
 | | Other Mailchimp MCPs | mailchimp-mcp |
 |---|---|---|
-| **Tools** | 40–50+ | **2** |
+| **Tools** | 40–50+ | **12** (10 native + search + execute) |
 | **API coverage** | Partial | **Full (282 endpoints)** |
 | **Token cost** | High (all schemas loaded) | **Minimal** |
-| **New endpoints** | Requires code changes | **Already covered** |
+| **Common tasks** | Same overhead as rare ones | **Optimized native tools** |
+| **New endpoints** | Requires code changes | **Already covered via execute** |
 
 ## Quick Start
-
-### Install
 
 Add to your MCP client config (Claude Code, Claude Desktop, Cursor, etc.):
 
@@ -44,31 +43,61 @@ The data center (`us12`, `us6`, etc.) is extracted automatically from your API k
 3. Click **Create A Key**
 4. Copy the key (format: `xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-usXX`)
 
-## Usage
+## Native Tools (The Fast Path)
+
+These 10 tools cover the complete mass email workflow — no searching required:
+
+| Tool | What it does |
+|------|-------------|
+| `list_audiences` | List all audiences with subscriber counts, open rates, click rates |
+| `list_campaigns` | Browse campaigns by status (draft, sent, scheduled, etc.) |
+| `create_campaign` | Create a new email campaign with subject, from name, reply-to |
+| `update_campaign_content` | Set HTML content or assign a template to a campaign |
+| `schedule_campaign` | Schedule a campaign for a future send time |
+| `send_campaign` | Send a campaign immediately |
+| `get_campaign_report` | Get opens, clicks, bounces, unsubscribes for a sent campaign |
+| `list_templates` | Browse your email templates |
+| `search_members` | Find subscribers by name or email across all audiences |
+| `add_or_update_member` | Add/update a subscriber with auto MD5 hash + optional tags |
+
+### Example: Full Campaign Workflow
+
+```
+1. list_audiences()                              → pick your audience
+2. list_templates(type: "user")                  → pick a template
+3. create_campaign(list_id, subject, from_name, reply_to)  → get campaign_id
+4. update_campaign_content(campaign_id, template_id: 123)  → set the content
+5. send_campaign(campaign_id)                    → send it
+6. get_campaign_report(campaign_id)              → check performance
+```
+
+### Example: Add a Subscriber
+
+```
+add_or_update_member(
+  list_id: "abc123",
+  email: "jane@example.com",
+  merge_fields: { "FNAME": "Jane", "LNAME": "Doe" },
+  tags: ["VIP", "2026-spring"]
+)
+```
+
+No need to compute the MD5 subscriber hash — it's handled automatically.
+
+## Universal Tools (The Long Tail)
+
+For anything beyond the 10 native tools, use `search` and `execute` to access all 282 Mailchimp API endpoints:
 
 ### Search: Discover endpoints
 
-Call `search` with no arguments to see all 29 API categories:
-
 ```
 > search()
-
 Mailchimp Marketing API — 282 endpoints across 29 categories
+  lists (66), campaigns (22), reports (22), automations (18), ecommerce (60), ...
 
-  automations (18) — Marketing automation workflows and triggered emails
-  campaigns (22) — Email campaigns — create, schedule, send, content, feedback
-  lists (66) — Audiences — members, segments, merge fields, tags, webhooks, signups
-  reports (22) — Campaign performance reports — opens, clicks, bounces
-  templates (6) — Email templates — create, update, manage
-  ...
-```
-
-Filter by category, HTTP method, or text search:
-
-```
-> search(tag: "campaigns", method: "POST")
-> search(query: "members subscribed")
-> search(query: "campaign send")
+> search(tag: "automations")
+> search(query: "segment members")
+> search(query: "merge fields", method: "POST")
 ```
 
 ### Execute: Call any endpoint
@@ -77,38 +106,12 @@ Filter by category, HTTP method, or text search:
 > execute(method: "GET", path: "/ping")
 { "health_status": "Everything's Chimpy!" }
 
-> execute(method: "GET", path: "/lists", params: { "count": "5" })
-{ "lists": [...] }
+> execute(method: "GET", path: "/automations", params: { "count": "5" })
 
-> execute(method: "POST", path: "/lists/{list_id}/members", body: {
-    "email_address": "user@example.com",
-    "status": "subscribed",
-    "merge_fields": { "FNAME": "Jane", "LNAME": "Doe" }
+> execute(method: "POST", path: "/lists/{list_id}/segments", body: {
+    "name": "Active subscribers",
+    "static_segment": ["email1@test.com", "email2@test.com"]
   })
-```
-
-## Example Workflows
-
-### List your audiences and their subscriber counts
-```
-1. search(tag: "lists", method: "GET")
-2. execute(method: "GET", path: "/lists", params: { "fields": "lists.id,lists.name,lists.stats.member_count" })
-```
-
-### Send a campaign
-```
-1. search(query: "campaign send")
-2. execute(method: "GET", path: "/campaigns", params: { "count": "5", "status": "save" })
-3. execute(method: "POST", path: "/campaigns/{campaign_id}/actions/send")
-```
-
-### Add a subscriber
-```
-1. search(query: "add member")
-2. execute(method: "POST", path: "/lists/{list_id}/members", body: {
-     "email_address": "subscriber@example.com",
-     "status": "subscribed"
-   })
 ```
 
 ## API Categories
@@ -128,16 +131,18 @@ Filter by category, HTTP method, or text search:
 
 ## How It Works
 
-1. **Embedded catalog** — At build time, we parse Mailchimp's [official OpenAPI spec](https://github.com/mailchimp/mailchimp-client-lib-codegen/blob/main/spec/marketing.json) and generate a compact catalog of all 282 endpoints with their paths, methods, parameters, and descriptions.
+**Hybrid architecture** — combines two patterns from the [Cloudflare Code Mode deep dive](https://blog.cloudflare.com/code-mode-for-mcp/):
 
-2. **Search tool** — Filters and scores the catalog using text matching, tag filtering, and method filtering. Returns formatted results the LLM can use to construct API calls.
+1. **Native tools** — 10 purpose-built tools for the mass email workflow. Zero search overhead, optimized field selection, auto-computed subscriber hashes. These handle the Pareto 80% of operations.
 
-3. **Execute tool** — Makes HTTP requests to the Mailchimp API using native `fetch()`. Auth is handled automatically via HTTP Basic Auth with your API key.
+2. **Search + Execute** — An embedded catalog of all 282 Mailchimp API endpoints (generated from the [official OpenAPI spec](https://github.com/mailchimp/mailchimp-client-lib-codegen/blob/main/spec/marketing.json)). Search discovers endpoints, execute calls them. This covers the long tail.
+
+Total context footprint: ~12 tool schemas instead of 50+.
 
 ## Development
 
 ```bash
-git clone https://github.com/yourusername/mailchimp-mcp.git
+git clone https://github.com/livemau5/mailchimp-mcp.git
 cd mailchimp-mcp
 npm install
 npm run build

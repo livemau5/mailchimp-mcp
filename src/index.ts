@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerSearchTool } from "./tools/search.js";
 import { registerExecuteTool } from "./tools/execute.js";
+import { registerNativeTools } from "./tools/native.js";
 
 const apiKey = process.env.MAILCHIMP_API_KEY;
 if (!apiKey) {
@@ -19,6 +20,7 @@ const server = new McpServer({
   version: "1.0.0",
 });
 
+registerNativeTools(server, apiKey);
 registerSearchTool(server);
 registerExecuteTool(server, apiKey);
 
