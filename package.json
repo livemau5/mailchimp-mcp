@@ -1,0 +1,39 @@
+{
+  "name": "mailchimp-mcp",
+  "version": "1.0.0",
+  "description": "2-tool Mailchimp MCP server: search the API, then execute any endpoint. Covers all 282 Marketing API endpoints with zero bloat.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "mailchimp-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc && chmod 755 dist/index.js",
+    "dev": "tsx src/index.ts",
+    "generate-catalog": "tsx scripts/generate-catalog.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.6.0"
+  },
+  "keywords": [
+    "mcp",
+    "mailchimp",
+    "model-context-protocol",
+    "ai",
+    "llm",
+    "email-marketing"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}
