@@ -2,23 +2,77 @@
 
 **12 tools. 282 endpoints. Zero bloat.**
 
-A hybrid Mailchimp MCP server: 10 native tools for the email campaign workflow you use every day, plus `search` and `execute` for full access to all 282 Marketing API endpoints. Inspired by [Cloudflare's Code Mode](https://developers.cloudflare.com/agents/guides/remote-mcp-server/) architecture.
+A hybrid Mailchimp MCP server built on the architecture Cloudflare pioneered for their own API: instead of drowning the model in 50+ tool definitions, we give it 10 fast native tools for the email workflow you actually use, plus two universal tools that unlock the entire Mailchimp Marketing API on demand.
 
-## Why?
+---
 
-Every other Mailchimp MCP server exposes 40–50+ individual tools. Each tool definition eats tokens in the LLM context on every turn — even when you're not using Mailchimp. We use the hybrid approach from [Cloudflare's Code Mode deep dive](https://blog.cloudflare.com/code-mode-for-mcp/): optimized native tools for high-frequency operations, plus two universal tools for everything else.
+## The Problem with Every Other Mailchimp MCP
+
+There are half a dozen Mailchimp MCP servers on GitHub. They all do the same thing: expose 40–50+ individual tools, one per API operation. `list_campaigns`, `get_campaign`, `create_campaign`, `delete_campaign`, `list_audiences`, `get_audience`, `add_member`, `update_member`... on and on.
+
+Every single one of those tool definitions gets loaded into the LLM's context window on every turn of every conversation — even when you're talking about something completely unrelated to Mailchimp. That's thousands of tokens burned before the model even starts thinking about your question.
+
+This is the **context flooding** problem. Cloudflare ran the math on their own API (2,500+ endpoints) and found that exposing everything as native MCP tools would consume **1.17 million tokens** per turn. Even aggressively pruned, it was 244,000 tokens. Their solution was radical: collapse the entire API surface into just two tools — `search` and `execute` — and let the model discover what it needs on the fly. They called it [Code Mode](https://blog.cloudflare.com/code-mode-for-mcp/), and it reduced the footprint to ~1,000 tokens.
+
+## Our Take: The Hybrid Architecture
+
+Pure Code Mode is elegant, but it has a tradeoff. For the stuff you do every single day — list your audiences, create a campaign, check open rates — forcing the model to search the API catalog first adds an unnecessary round trip. You already know what you want. The model should too.
+
+The [deeper analysis](https://blog.cloudflare.com/code-mode-for-mcp/) of real-world API traffic reveals a consistent pattern: a Pareto distribution. The vast majority of what people actually do hits a tiny subset of endpoints. The long tail is everything else.
+
+So we built a hybrid:
+
+**Layer 1: 10 native tools** for the mass email workflow. These are purpose-built, zero-overhead, and handle the 80% case. Creating a campaign, sending it, checking the report — one tool call, done. No searching, no discovering, no extra turns.
+
+**Layer 2: `search` + `execute`** for everything else. An embedded catalog of all 282 Mailchimp API endpoints, generated from the [official OpenAPI spec](https://github.com/mailchimp/mailchimp-client-lib-codegen/blob/main/spec/marketing.json). The model searches to discover endpoints, then executes to call them. Automations, e-commerce, landing pages, file management, batch operations — it's all there without adding a single extra tool definition.
+
+The result: **12 tool schemas** in your context window instead of 50+. Fast for the common case, omnipotent for the edge case.
 
 | | Other Mailchimp MCPs | mailchimp-mcp |
 |---|---|---|
-| **Tools** | 40–50+ | **12** (10 native + search + execute) |
+| **Tools in context** | 40–50+ | **12** |
 | **API coverage** | Partial | **Full (282 endpoints)** |
-| **Token cost** | High (all schemas loaded) | **Minimal** |
+| **Token cost per turn** | High (all schemas always loaded) | **Minimal** |
 | **Common tasks** | Same overhead as rare ones | **Optimized native tools** |
-| **New endpoints** | Requires code changes | **Already covered via execute** |
+| **New Mailchimp endpoints** | Requires code changes | **Already covered via execute** |
 
-## Quick Start
+---
 
-Add to your MCP client config (Claude Code, Claude Desktop, Cursor, etc.):
+## Setup
+
+### Get Your Mailchimp API Key
+
+1. Log in to [Mailchimp](https://mailchimp.com)
+2. Go to **Profile → Extras → API keys**
+3. Click **Create A Key**
+4. Copy the key — it looks like: `xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-usXX`
+
+The suffix after the dash (`us12`, `us6`, etc.) is your data center. The server extracts it automatically.
+
+### Claude Code
+
+Add to your `~/.claude.json` (or project-level `.claude.json`) under `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "mailchimp": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "mailchimp-mcp"],
+      "env": {
+        "MAILCHIMP_API_KEY": "your-api-key-us12"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Code for the server to connect. You'll see `mailchimp` in your MCP server list, and the tools will appear as `mcp__mailchimp__list_audiences`, `mcp__mailchimp__search`, etc.
+
+### Claude Desktop
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
 ```json
 {
@@ -34,18 +88,35 @@ Add to your MCP client config (Claude Code, Claude Desktop, Cursor, etc.):
 }
 ```
 
-The data center (`us12`, `us6`, etc.) is extracted automatically from your API key suffix.
+Restart Claude Desktop. The Mailchimp tools will appear in the tools menu (hammer icon).
 
-### Get Your API Key
+### Cursor / Windsurf / Other MCP Clients
 
-1. Log in to [Mailchimp](https://mailchimp.com)
-2. Go to **Profile → Extras → API keys**
-3. Click **Create A Key**
-4. Copy the key (format: `xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-usXX`)
+The config pattern is the same — `npx -y mailchimp-mcp` as the command, with your API key in the `env` block. Consult your client's MCP documentation for where to place the config.
 
-## Native Tools (The Fast Path)
+### Running from Source (Development)
 
-These 10 tools cover the complete mass email workflow — no searching required:
+If you cloned the repo instead of using npx:
+
+```json
+{
+  "mcpServers": {
+    "mailchimp": {
+      "command": "node",
+      "args": ["/path/to/mailchimp-mcp/dist/index.js"],
+      "env": {
+        "MAILCHIMP_API_KEY": "your-api-key-us12"
+      }
+    }
+  }
+}
+```
+
+---
+
+## Native Tools: The Fast Path
+
+These 10 tools cover the complete mass email lifecycle — no searching required:
 
 | Tool | What it does |
 |------|-------------|
@@ -60,15 +131,15 @@ These 10 tools cover the complete mass email workflow — no searching required:
 | `search_members` | Find subscribers by name or email across all audiences |
 | `add_or_update_member` | Add/update a subscriber with auto MD5 hash + optional tags |
 
-### Example: Full Campaign Workflow
+### Example: End-to-End Campaign
 
 ```
-1. list_audiences()                              → pick your audience
-2. list_templates(type: "user")                  → pick a template
-3. create_campaign(list_id, subject, from_name, reply_to)  → get campaign_id
-4. update_campaign_content(campaign_id, template_id: 123)  → set the content
-5. send_campaign(campaign_id)                    → send it
-6. get_campaign_report(campaign_id)              → check performance
+1. list_audiences()                                          → find your audience ID
+2. list_templates(type: "user")                              → find a template
+3. create_campaign(list_id, subject, from_name, reply_to)    → get a campaign_id back
+4. update_campaign_content(campaign_id, template_id: 123)    → set the email content
+5. send_campaign(campaign_id)                                → fire it off
+6. get_campaign_report(campaign_id)                          → check opens & clicks
 ```
 
 ### Example: Add a Subscriber
@@ -82,25 +153,40 @@ add_or_update_member(
 )
 ```
 
-No need to compute the MD5 subscriber hash — it's handled automatically.
+The MD5 subscriber hash that Mailchimp requires is computed automatically from the email — you never have to think about it.
 
-## Universal Tools (The Long Tail)
+---
 
-For anything beyond the 10 native tools, use `search` and `execute` to access all 282 Mailchimp API endpoints:
+## Universal Tools: The Long Tail
 
-### Search: Discover endpoints
+For anything beyond the 10 native tools — automations, e-commerce, segments, webhooks, landing pages, file uploads, batch operations, and hundreds more — use `search` and `execute`.
+
+### Search: Discover What's Available
+
+Call with no arguments to see the full API map:
 
 ```
 > search()
-Mailchimp Marketing API — 282 endpoints across 29 categories
-  lists (66), campaigns (22), reports (22), automations (18), ecommerce (60), ...
 
+Mailchimp Marketing API — 282 endpoints across 29 categories
+
+  lists (66) — Audiences, members, segments, merge fields, tags, webhooks, signups
+  ecommerce (60) — Stores, products, orders, carts, customers
+  campaigns (22) — Email campaigns — create, schedule, send, content, feedback
+  reports (22) — Campaign performance reports — opens, clicks, bounces
+  automations (18) — Marketing automation workflows and triggered emails
+  ...
+```
+
+Narrow it down:
+
+```
 > search(tag: "automations")
 > search(query: "segment members")
 > search(query: "merge fields", method: "POST")
 ```
 
-### Execute: Call any endpoint
+### Execute: Call Any Endpoint
 
 ```
 > execute(method: "GET", path: "/ping")
@@ -114,7 +200,9 @@ Mailchimp Marketing API — 282 endpoints across 29 categories
   })
 ```
 
-## API Categories
+---
+
+## All 29 API Categories
 
 | Category | Endpoints | Description |
 |----------|-----------|-------------|
@@ -127,17 +215,28 @@ Mailchimp Marketing API — 282 endpoints across 29 categories
 | fileManager | 11 | File and image uploads |
 | landingPages | 8 | Landing page management |
 | templates | 6 | Email templates |
-| + 20 more | | See `search()` for the full list |
+| verifiedDomains | 5 | Domain verification for sending |
+| connectedSites | 5 | Connected e-commerce sites |
+| batchWebhooks | 5 | Batch webhook configurations |
+| campaignFolders | 5 | Organize campaigns into folders |
+| templateFolders | 5 | Organize templates into folders |
+| batches | 4 | Batch operations for bulk API calls |
+| conversations | 4 | Conversation tracking and messages |
+| contacts | 4 | Contact management |
+| audiences | 4 | Audience management |
+| Surveys | 3 | Survey management |
+| accountExports | 2 | Account data exports |
+| authorizedApps | 2 | OAuth authorized applications |
+| facebookAds | 2 | Facebook ad campaigns |
+| accountExport | 1 | Export account data |
+| activityFeed | 1 | Activity feed events |
+| customerJourneys | 1 | Customer journey automations |
+| ping | 1 | API health check |
+| root | 1 | API root and account info |
+| searchCampaigns | 1 | Search campaigns by query |
+| searchMembers | 1 | Search audience members by query |
 
-## How It Works
-
-**Hybrid architecture** — combines two patterns from the [Cloudflare Code Mode deep dive](https://blog.cloudflare.com/code-mode-for-mcp/):
-
-1. **Native tools** — 10 purpose-built tools for the mass email workflow. Zero search overhead, optimized field selection, auto-computed subscriber hashes. These handle the Pareto 80% of operations.
-
-2. **Search + Execute** — An embedded catalog of all 282 Mailchimp API endpoints (generated from the [official OpenAPI spec](https://github.com/mailchimp/mailchimp-client-lib-codegen/blob/main/spec/marketing.json)). Search discovers endpoints, execute calls them. This covers the long tail.
-
-Total context footprint: ~12 tool schemas instead of 50+.
+---
 
 ## Development
 
@@ -152,6 +251,22 @@ npm run generate-catalog
 
 # Run in development mode
 MAILCHIMP_API_KEY=your-key-us12 npm run dev
+```
+
+### Project Structure
+
+```
+src/
+  index.ts              Entry point — server setup, tool registration, stdio transport
+  types.ts              CatalogEntry interface
+  utils.ts              Data center extraction, URL building, auth, response formatting
+  api-catalog.ts        Auto-generated catalog of all 282 endpoints
+  tools/
+    native.ts           10 native tools for the mass email workflow
+    search.ts           Search tool — text/tag/method filtering over the catalog
+    execute.ts          Execute tool — HTTP client with automatic Basic Auth
+scripts/
+  generate-catalog.ts   Parses official Mailchimp OpenAPI spec into api-catalog.ts
 ```
 
 ## License
