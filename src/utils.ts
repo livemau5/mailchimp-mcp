@@ -1,4 +1,5 @@
 const MAX_RESPONSE_BYTES = 50_000;
+const COMPACT_RESPONSE_BYTES = 4_000;
 
 export function extractDataCenter(apiKey: string): string {
   const parts = apiKey.split("-");
@@ -40,6 +41,49 @@ export function formatResponse(data: unknown): string {
     );
   }
   return json;
+}
+
+/**
+ * Summarize a write response into a compact confirmation.
+ * Extracts key fields to avoid flooding the LLM context with full API responses.
+ */
+export function summarizeWriteResponse(
+  data: unknown,
+  action: string
+): string {
+  if (typeof data !== "object" || data === null) {
+    return `${action}: Success`;
+  }
+  const d = data as Record<string, unknown>;
+
+  const summary: Record<string, unknown> = {};
+  const keepFields = [
+    "id", "web_id", "type", "status", "title", "name",
+    "email_address", "unique_email_id", "list_id",
+    "send_time", "emails_sent", "content_type",
+    "subject_line", "from_name", "reply_to",
+    "member_count", "date_created",
+  ];
+  for (const key of keepFields) {
+    if (key in d) summary[key] = d[key];
+  }
+  // Flatten settings if present
+  if (typeof d.settings === "object" && d.settings !== null) {
+    const s = d.settings as Record<string, unknown>;
+    if (s.subject_line) summary.subject_line = s.subject_line;
+    if (s.title) summary.title = s.title;
+    if (s.from_name) summary.from_name = s.from_name;
+  }
+
+  if (Object.keys(summary).length > 0) {
+    return `${action}\n${JSON.stringify(summary, null, 2)}`;
+  }
+
+  const json = JSON.stringify(data, null, 2);
+  if (json.length > COMPACT_RESPONSE_BYTES) {
+    return `${action}\n${json.slice(0, COMPACT_RESPONSE_BYTES)}\n\n... [Truncated. Use get_campaign_report or list_campaigns for full data.]`;
+  }
+  return `${action}\n${json}`;
 }
 
 export function formatError(status: number, body: unknown): string {

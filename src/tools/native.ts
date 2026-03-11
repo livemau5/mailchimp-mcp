@@ -7,7 +7,10 @@ import {
   buildAuthHeader,
   formatResponse,
   formatError,
+  summarizeWriteResponse,
 } from "../utils.js";
+
+const VERBOSE_DESC = "Return full API response instead of compact summary (default false)";
 
 function subscriberHash(email: string): string {
   return createHash("md5").update(email.toLowerCase().trim()).digest("hex");
@@ -19,7 +22,8 @@ async function mc(
   method: string,
   path: string,
   params?: Record<string, string>,
-  body?: unknown
+  body?: unknown,
+  compact?: string
 ): Promise<{ text: string; isError?: boolean }> {
   const url = buildUrl(dc, path, params);
   const opts: RequestInit = {
@@ -34,6 +38,9 @@ async function mc(
     const ct = res.headers.get("content-type") ?? "";
     const data = ct.includes("json") ? await res.json() : await res.text();
     if (!res.ok) return { text: formatError(res.status, data), isError: true };
+    if (compact) {
+      return { text: summarizeWriteResponse(data, compact) };
+    }
     return { text: formatResponse(data) };
   } catch (err) {
     return {
@@ -87,7 +94,7 @@ export function registerNativeTools(server: McpServer, apiKey: string): void {
   // 3. Create Campaign
   server.tool(
     "create_campaign",
-    "Create a new email campaign. Returns the campaign ID for use with update_campaign_content and send/schedule.",
+    "Create a new email campaign. Returns the campaign ID for use with update_campaign_content and send/schedule. Returns compact confirmation by default — set verbose=true for full response.",
     {
       list_id: z.string().describe("Audience/list ID to send to"),
       subject: z.string().describe("Email subject line"),
@@ -96,8 +103,9 @@ export function registerNativeTools(server: McpServer, apiKey: string): void {
       reply_to: z.string().describe("Reply-to email address"),
       preview_text: z.string().optional().describe("Preview text shown in inbox"),
       segment_id: z.number().optional().describe("Segment ID to send to (subset of audience)"),
+      verbose: z.boolean().optional().describe(VERBOSE_DESC),
     },
-    async ({ list_id, subject, title, from_name, reply_to, preview_text, segment_id }) => {
+    async ({ list_id, subject, title, from_name, reply_to, preview_text, segment_id, verbose }) => {
       const body: Record<string, unknown> = {
         type: "regular",
         recipients: { list_id },
@@ -110,7 +118,7 @@ export function registerNativeTools(server: McpServer, apiKey: string): void {
       };
       if (preview_text) (body.settings as Record<string, unknown>).preview_text = preview_text;
       if (segment_id) (body.recipients as Record<string, unknown>).segment_opts = { saved_segment_id: segment_id };
-      const r = await mc(dc, auth, "POST", "/campaigns", undefined, body);
+      const r = await mc(dc, auth, "POST", "/campaigns", undefined, body, verbose ? undefined : "Campaign created successfully.");
       return { content: [{ type: "text" as const, text: r.text }], isError: r.isError };
     }
   );
@@ -118,17 +126,18 @@ export function registerNativeTools(server: McpServer, apiKey: string): void {
   // 4. Update Campaign Content
   server.tool(
     "update_campaign_content",
-    "Set the HTML content or template for a campaign. Provide either html OR template_id.",
+    "Set the HTML content or template for a campaign. Provide either html OR template_id. Returns compact confirmation by default — set verbose=true for full response.",
     {
       campaign_id: z.string().describe("Campaign ID"),
       html: z.string().optional().describe("Full HTML content for the email"),
       template_id: z.number().optional().describe("Template ID to use instead of raw HTML"),
+      verbose: z.boolean().optional().describe(VERBOSE_DESC),
     },
-    async ({ campaign_id, html, template_id }) => {
+    async ({ campaign_id, html, template_id, verbose }) => {
       const body: Record<string, unknown> = {};
       if (html) body.html = html;
       if (template_id) body.template = { id: template_id };
-      const r = await mc(dc, auth, "PUT", `/campaigns/${campaign_id}/content`, undefined, body);
+      const r = await mc(dc, auth, "PUT", `/campaigns/${campaign_id}/content`, undefined, body, verbose ? undefined : "Campaign content updated successfully.");
       return { content: [{ type: "text" as const, text: r.text }], isError: r.isError };
     }
   );
@@ -136,15 +145,16 @@ export function registerNativeTools(server: McpServer, apiKey: string): void {
   // 5. Schedule Campaign
   server.tool(
     "schedule_campaign",
-    "Schedule a campaign to send at a specific time.",
+    "Schedule a campaign to send at a specific time. Returns compact confirmation by default — set verbose=true for full response.",
     {
       campaign_id: z.string().describe("Campaign ID"),
       schedule_time: z.string().describe("Send time in ISO 8601 format (e.g., '2026-03-15T10:00:00+00:00')"),
+      verbose: z.boolean().optional().describe(VERBOSE_DESC),
     },
-    async ({ campaign_id, schedule_time }) => {
+    async ({ campaign_id, schedule_time, verbose }) => {
       const r = await mc(dc, auth, "POST", `/campaigns/${campaign_id}/actions/schedule`, undefined, {
         schedule_time,
-      });
+      }, verbose ? undefined : "Campaign scheduled successfully.");
       return { content: [{ type: "text" as const, text: r.text }], isError: r.isError };
     }
   );
@@ -152,12 +162,13 @@ export function registerNativeTools(server: McpServer, apiKey: string): void {
   // 6. Send Campaign
   server.tool(
     "send_campaign",
-    "Send a campaign immediately. The campaign must have content set first via update_campaign_content.",
+    "Send a campaign immediately. The campaign must have content set first via update_campaign_content. Returns compact confirmation by default — set verbose=true for full response.",
     {
       campaign_id: z.string().describe("Campaign ID to send"),
+      verbose: z.boolean().optional().describe(VERBOSE_DESC),
     },
-    async ({ campaign_id }) => {
-      const r = await mc(dc, auth, "POST", `/campaigns/${campaign_id}/actions/send`);
+    async ({ campaign_id, verbose }) => {
+      const r = await mc(dc, auth, "POST", `/campaigns/${campaign_id}/actions/send`, undefined, undefined, verbose ? undefined : "Campaign sent successfully.");
       return { content: [{ type: "text" as const, text: r.text }], isError: r.isError };
     }
   );
@@ -215,15 +226,16 @@ export function registerNativeTools(server: McpServer, apiKey: string): void {
   // 10. Add or Update Member
   server.tool(
     "add_or_update_member",
-    "Add a new subscriber or update an existing one (upsert). Automatically computes the required subscriber hash from the email.",
+    "Add a new subscriber or update an existing one (upsert). Automatically computes the required subscriber hash from the email. Returns compact confirmation by default — set verbose=true for full response.",
     {
       list_id: z.string().describe("Audience/list ID"),
       email: z.string().describe("Subscriber email address"),
       status: z.enum(["subscribed", "unsubscribed", "cleaned", "pending", "transactional"]).optional().describe("Subscription status (default: subscribed for new, unchanged for existing)"),
       merge_fields: z.record(z.string()).optional().describe('Merge fields like { "FNAME": "Jane", "LNAME": "Doe" }'),
       tags: z.array(z.string()).optional().describe('Tags to add, e.g., ["VIP", "2026-campaign"]'),
+      verbose: z.boolean().optional().describe(VERBOSE_DESC),
     },
-    async ({ list_id, email, status, merge_fields, tags }) => {
+    async ({ list_id, email, status, merge_fields, tags, verbose }) => {
       const hash = subscriberHash(email);
       const body: Record<string, unknown> = {
         email_address: email,
@@ -231,7 +243,7 @@ export function registerNativeTools(server: McpServer, apiKey: string): void {
       };
       if (status) body.status = status;
       if (merge_fields) body.merge_fields = merge_fields;
-      const r = await mc(dc, auth, "PUT", `/lists/${list_id}/members/${hash}`, undefined, body);
+      const r = await mc(dc, auth, "PUT", `/lists/${list_id}/members/${hash}`, undefined, body, verbose ? undefined : "Member added/updated successfully.");
 
       // If tags provided, apply them in a separate call
       if (tags && tags.length > 0 && !r.isError) {

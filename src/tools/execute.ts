@@ -6,6 +6,7 @@ import {
   buildAuthHeader,
   formatResponse,
   formatError,
+  summarizeWriteResponse,
 } from "../utils.js";
 
 const executeSchema = {
@@ -27,6 +28,12 @@ const executeSchema = {
     .describe(
       'Query parameters (e.g., { "count": "10", "offset": "0", "status": "subscribed" })'
     ),
+  verbose: z
+    .boolean()
+    .optional()
+    .describe(
+      "Return full API response. By default, write operations (POST/PATCH/PUT/DELETE) return compact summaries to save context. Set verbose=true to get the full response."
+    ),
 };
 
 export function registerExecuteTool(server: McpServer, apiKey: string): void {
@@ -35,10 +42,10 @@ export function registerExecuteTool(server: McpServer, apiKey: string): void {
 
   server.tool(
     "execute",
-    "Execute any Mailchimp Marketing API call. Use the search tool first to discover available endpoints and their parameters.",
+    "Execute any Mailchimp Marketing API call. Use the search tool first to discover available endpoints and their parameters. Write operations return compact summaries by default — set verbose=true for full response.",
     executeSchema,
     async (params) => {
-      const { method, path, body, params: queryParams } = params;
+      const { method, path, body, params: queryParams, verbose } = params;
 
       const url = buildUrl(dc, path, queryParams);
 
@@ -71,6 +78,21 @@ export function registerExecuteTool(server: McpServer, apiKey: string): void {
               { type: "text", text: formatError(response.status, data) },
             ],
             isError: true,
+          };
+        }
+
+        // Compact mode for write operations (unless verbose requested)
+        if (!verbose && ["POST", "PATCH", "PUT", "DELETE"].includes(method)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: summarizeWriteResponse(
+                  data,
+                  `${method} ${path} — Success.`
+                ),
+              },
+            ],
           };
         }
 
